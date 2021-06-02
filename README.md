@@ -14,6 +14,7 @@ Sometimes there are chances that some projects may not come into light but are d
 The dataset package provided consists of 6 files containing the details of donations, donors, schools, projects, teachers and resources.
 
 Source: Kaggle (update - The dataset has been removed now)
+and because of its huge size, I couldn't upload it here.
 
 * * *
 
