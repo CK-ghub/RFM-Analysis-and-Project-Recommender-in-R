@@ -1,0 +1,871 @@
+---
+title: "<center><b>Project Recommendation System for DonorsChoose.org in R</b></center>"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+* * *
+### Reg. No: 18BCE1227
+
+### Name: C Koushik
+
+* * *
+## About the dataset
+The dataset package provided consists of 6 files containing the details of donations, donors, schools, projects, teachers and resources.
+
+Source: Kaggle
+
+* * *
+## Background and Objective
+DonorsChoose.org is a US based non-profit organisation founded in the year 2000, that helps public school classroom projects get funded directly by helpful donors. Through charity, they make it easy for anyone to help a classroom in need. The organisation wants to inspire active donors to donate again towards projects they feel strong about. In order to do that, the organisation wants to pair the donors with related classrooms based on their previous donations and interests so that they are motivated to donate again. 
+
+Sometimes there are chances that some projects may not come into light but are desperate for donations. Therefore, we build a recommendation system that recommends categories of projects to teachers across based on previous donations or interests through RFM (Recency, Frequency, Monetory value) clustering analysis to group similar types of donors mapped with the respective project category through recommendation.
+
+* * *
+## Plans for Review
+Review 1: Defining problem statement and reading the dataset followed by basic commands.<br>
+Review 2: Exploratory data analysis.<br>
+Review 3: To perform clustering based on RFM analysis and recommend project categories.
+
+## How does this analysis help?
+Before making recommendations, it would be great to know the right set of donors based on their recent activities, how they actively involve themselves or stay less connected.
+
+Helps find the right set of projects for first time donors. Since we're not usually aware of their preferences yet, its difficult to comprehend their interests right away, leading to a cold start problem. So using the clustering technique can solve such problems.
+
+* * *
+## Review 1
+
+* * *
+
+### Setup
+```{r}
+rm(list = ls())
+#Importing libraries
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(gganimate)
+library(IRdisplay)
+library(viridis)
+library(plotly)
+library(tidytext)
+library(stringr)
+library(wordcloud)
+library(clValid)
+```
+
+### Basic commands
+```{r}
+df_donations=read.csv('Donations.csv')
+df_donors=read.csv('Donors.csv')
+df_projects=read.csv('Projects.csv')
+df_resources=read.csv('Resources.csv')
+df_schools=read.csv('Schools.csv')
+df_teachers=read.csv('Teachers.csv')
+```
+
+```{r}
+str(df_donations)
+str(df_donors)
+str(df_projects)
+str(df_resources)
+str(df_schools)
+str(df_teachers)
+```
+```{r}
+head(df_donations)
+head(df_donors)
+head(df_projects)
+head(df_resources)
+head(df_schools)
+head(df_teachers)
+```
+
+* * *
+## Review 2
+
+* * *
+## Exploratory Data Analysis
+
+* * *
+### Donations dataset
+
+The file contains 4687884 records with 7 variables. They are Project ID, Donation ID, Donor ID, Donation Included Optional Donation, Donation Amount, Donor Cart Sequence, Donation Received Date. <br>
+
+Project ID: Unique identifier of a donor.<br>
+Donation ID: Unique ID of a donation.<br>
+Donor ID: The donor’s state.<br>
+Donation Included Optional Donation: Yes/No to give 15% of donation amount to Donoschoose.org.<br>
+Donation Amount: Total amount donated for a project.<br>
+Donor Cart Sequence: Project position on list of desired donations within Cart list.<br>
+Donation Received Date: Date and time on which the donation was received.<br>
+
+```{r}
+#Checking for null values
+sum(is.na(df_donations))
+```
+<b>No null values present in this dataset.</b>
+```{r}
+summary(df_donations)
+```
+
+```{r}
+#Finding number of unique records for all variables
+df_donations %>% summarise_all(funs(n_distinct))
+```
+
+<b>We observe that there are 4687844 unique donations, 900K projects and 2M donors.</b>
+
+```{r}
+#Distribution of Donation Amount
+ggplot(df_donations, aes(x=Donation.Amount))+
+  geom_boxplot(fill="#40B0A6")+coord_flip()
+```
+
+```{r}
+data.frame(min_amount=min(df_donations$Donation.Amount),
+           max_amount=max(df_donations$Donation.Amount),
+           mean_amount=mean(df_donations$Donation.Amount),
+           median_amount=median(df_donations$Donation.Amount)
+           )
+```
+
+<b>From the above boxplot and table, the median and mean values, we can see that most of the donations lie in the range of 25-100 USD roughly. Due to the presence of extreme outliers the box plot is flattened. Therefore to visualize the boxplot distribution, we can neglect outliers and filter those donations below 100 USD</b>
+
+```{r}
+donations = df_donations%>%filter(Donation.Amount<100)
+ggplot(donations, aes(x=Donation.Amount))+
+  geom_boxplot(fill="#40B0A6")+coord_flip()
+```
+
+```{r}
+donations %>% 
+  ggplot(aes(Donation.Amount))+
+  geom_density(alpha=0.3)+ geom_vline(aes(xintercept=median(Donation.Amount)),
+             color="red", linetype="dashed", size=1)+
+  labs(col = "Optional Donation",
+       x = "Donation Amount",
+       y = "Density")
+```
+
+```{r}
+ggplot(df_donations,aes(x=Donation.Included.Optional.Donation, fill=Donation.Included.Optional.Donation))+ geom_bar()+theme_bw()
+```
+
+<b>Most of the donors have opted for Optional Donations.</b>
+```{r}
+#One time donors
+df_donations%>%filter(Donor.Cart.Sequence<=30)%>%
+group_by(Donor.Cart.Sequence)%>%summarize(count=n())%>%
+  mutate(Donor.Cart.Sequence=as.factor(Donor.Cart.Sequence))%>%
+  ggplot(aes(x=Donor.Cart.Sequence, y=count, group=1))+geom_line(stat="identity", color="blue") + 
+  geom_point(stat="identity", color="red")+ labs(x="The Donor cart sequence",
+                                                 y="no of Donors", 
+                                                 title="The difference in the no. of one time donors and the rest")
+```
+
+<b>From the above plotm we can see that most of them are one-time donors. Let's find out the percentage of one-time donors.</b>
+```{r}
+print(paste("the Percentage of one time Donors is ",((df_donations%>%filter(Donor.Cart.Sequence==1) %>%nrow)-(df_donations%>%filter(Donor.Cart.Sequence==2) %>%nrow)) /(df_donations%>%filter(Donor.Cart.Sequence==1) %>%nrow)*100,"%"))
+```
+
+```{r}
+#Feature Engineering the Received Date
+df_donations$Donation.year=year(df_donations$Donation.Received.Date)
+df_donations$Donation.month=month(df_donations$Donation.Received.Date)
+```
+
+```{r}
+#Trend of donation amount over the years
+df_donations %>% group_by(Donation.year, Donation.month) %>% summarise(Yearly.donation = sum(Donation.Amount))%>%
+ggplot(aes(Donation.year, Yearly.donation, size = Yearly.donation,colour = as.factor(Donation.month), frame = Donation.year)) +
+  geom_point() + labs(x="Years",
+                      y="Total Donation Amount", 
+                      title="Year-month wise total donation amount")+
+  theme_bw()
+  
+#transition_time(Donation.year)
+#gif<-animate(g, width=800, height=400, renderer=gifski_renderer(loop=FALSE))  
+#save_animation(gif,"output.gif")
+#display_html('<iframe src="output.gif" width=70% height=500></iframe>')
+```
+
+<b>We see that the donations received are lowest in the month of June, while maximum donations are being made in the month of December.</b>
+```{r}
+#Trend of donation amount over the months
+df_donations %>% group_by(Donation.month) %>% summarise(Monthly.donation = sum(Donation.Amount))%>%
+ggplot(aes(as.factor(Donation.month), Monthly.donation, colour = as.factor(Donation.month), group=1)) + geom_line(color="purple")+
+  geom_point() +labs(x="Months",
+                      y="Total Donation Amount", 
+                      title="Month wise total donation amount")+
+  theme_bw()
+```
+
+<b>We can notice a dip in donations around the months of April, May, and June followed by a steep rise. This could be due to return from summer holidays.</b>
+ 
+### Donors Dataset
+
+This file contains 2122640 observations with 6 variables. They are, <br>
+Donor ID: Unique identifier of a donor.<br>
+Donor City: The donor’s city.<br>
+Donor State: The donor’s state.<br>
+Donor Is Teacher: Whether or not the donor is also a teacher with a DonorsChoose.org teacher account.<br>
+Donor Zip: The donor’s zip code (only first 3 digits).<br>
+```{r}
+glimpse(df_donors)
+```
+
+```{r}
+df_donors %>% summarise_all(funs(n_distinct))
+```
+
+```{r}
+#Replacing "" in city with NA values
+df_donors = df_donors %>% mutate(Donor.City = replace(Donor.City,Donor.City=="",NA))
+```
+
+
+```{r}
+#Top Cities in terms of donations, ignoring NA vakues
+df_donors %>% group_by(Donor.City) %>% na.omit()%>% summarise(count = length(Donor.City)) %>% top_n(10, wt = count)%>%
+ggplot(aes(x = reorder(Donor.City, count), y = count, fill = count)) + 
+   geom_bar(stat = 'identity') +  scale_fill_viridis(direction = 1)+coord_flip()+
+    theme_bw()+ xlab("City") +ggtitle("Top 10 cities w.r.t total number of donors")
+```
+
+<b>The top cities from where the donors belong are Chicago, New York, Brooklyn, etc.</b>
+
+```{r}
+#Donors map, distribution across the states
+#Grouping based on total number of donors
+state = df_donors %>% group_by(Donor.State) %>% summarise(number_of_donors = length(Donor.ID))
+state$Donor.State = tolower(state$Donor.State)
+
+#Assigning name of states in USA
+master <- c("CALIFORNIA", "ARIZONA", "ARKANSAS","Alabama", "Alaska", "colorado", "CONNECTICUT","Delaware", "DISTRICT OF COLUMBIA", 
+  "FLORIDA", "Georgia", "hawaii","Idaho", "Illinois", "Indiana", "Iowa", "kansas", "Kentucky", "LOUISIANA", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota","Mississippi", "Missouri", 
+  "MONTANA", "NEBRASKA", "Nevada", "New Hampshire", "New Jersey", "NEW MEXICO", "New York", 
+  "North Carolina","North Dakota", "OHIO", "OKLAHOMA", "Oregon", "PANAMA", "Pennsylvania", "Rhode Island",
+  "SOUTH CAROLINA", "SOUTH DAKOTA", "Tennessee", "Texas", "UTAH", "Vermont",
+  "Virgin Islands", "VIRGINIA", "Washington", "West Virginia", "WISCONSIN", "Wyoming")
+
+master_low = tolower(master)
+
+#State table with state names and abbreviations
+state_tbl = setNames(state.abb, tolower(state.name))
+state_tbl = data.frame(
+  orig=master,
+  lower=master_low,
+  abbrev=state_tbl[master_low],
+  stringsAsFactors=FALSE
+)
+
+#Merging state table and state variable by taking common values
+merge = merge(state, state_tbl, by.x = "Donor.State", by.y = "lower")
+plot_ly(type="choropleth",locations = merge$abbrev, locationmode="USA-states", z=merge$number_of_donors) %>% layout(geo=list(scope="usa"))
+```
+
+<b>We can observe that California is the highest in terms of total number of donors.</b>
+
+### Projects Dataset
+
+This file contains 34919 observations of 18 variables. They are,<br>
+
+Project ID: Unique identifier of a project.<br>
+School ID: Unique identifier of a school where the project is proposed from.<br>
+Teacher ID: Unique identifier of a teacher who proposed the project.<br>
+Teacher Project Posted Sequence: Represents the order as a project issued by the teacher.<br>
+Project Type: Type of the project.<br>
+Project Title: Title of the project.<br>
+Project Essay: Essay of the project.<br>
+Project Short Description: Description of the project.<br>
+Project Need Statement: Statement for the resources that the project needs.<br>
+Project Subject Category Tree: Category of the project.<br>
+Project Subject Subcategory Tree: Subcategory of the project.<br>
+Project Grade Level Category: Grade level that the project aims.<br>
+Project Resource Category: Category of resources that the project needs.<br>
+Project Cost: Costs of the project.<br>
+Project Posted Date: Date when the project is posted.<br>
+Project Expiration Date: Date when the project is expired.<br>
+Project Current Status: Current status of the project.<br>
+Project Fully Funded Date: Date when the project gets fully funded.<br>
+
+```{r}
+glimpse(df_projects)
+```
+
+```{r}
+df_projects %>% summarise_all(funs(n_distinct))
+```
+
+```{r}
+#Feature Engineering
+df_projects$Project.Type = as.factor(df_projects$Project.Type)
+df_projects$Project.Subject.Category.Tree = as.factor(df_projects$Project.Subject.Category.Tree)
+df_projects$Project.Subject.Subcategory.Tree = as.factor(df_projects$Project.Subject.Subcategory.Tree)
+df_projects$Project.Resource.Category = as.factor(df_projects$Project.Resource.Category)
+df_projects$Project.Current.Status = as.factor(df_projects$Project.Current.Status)
+df_projects$Project.Grade.Level.Category = as.factor(df_projects$Project.Grade.Level.Category)
+```
+
+```{r}
+#Distribution of type of projects
+levels(df_projects$Project.Type)
+
+```
+
+<b>All of the projects are Teacher-led</b>
+
+```{r}
+#Distribution of project categories
+#To extract only main categories
+df_projects$cat <- gsub(",.*$", "", df_projects$Project.Subject.Category.Tree)
+df_projects$cat = as.factor(df_projects$cat)
+levels(df_projects$cat)
+
+#Replacing "" in cat with NA values
+df_projects = df_projects %>% mutate(cat = replace(cat,cat=="",NA))
+
+df_projects %>% group_by(cat) %>% summarise(count = length(Project.ID)) %>% na.omit()%>%top_n(10, wt = count)%>%
+ggplot(aes(x = reorder(cat, count), y = count, fill = count)) + 
+   geom_bar(stat = 'identity') +scale_fill_viridis(direction = -1)+ coord_flip()+
+    theme_bw()+ theme(legend.position = 'none')+xlab("Category") + ylab("Top 10 Categories")
+```
+
+<b>Literacy & Language, Math & Science and Applied learning are the top 3 categories of projects</b>
+```{r}
+#Distribution of project sub categories
+#To extract first words of subcategories
+df_projects$subcat <- gsub(",.*$", "", df_projects$Project.Subject.Subcategory.Tree)
+df_projects$subcat = as.factor(df_projects$subcat)
+levels(df_projects$subcat)
+
+#Replacing "" in subcat with NA values
+df_projects = df_projects %>% mutate(subcat = replace(subcat,subcat=="",NA))
+
+df_projects %>% group_by(subcat) %>% summarise(count = length(Project.ID)) %>% na.omit()%>%top_n(10, wt = count)%>%
+ggplot(aes(x = reorder(subcat, count), y = count, fill = count)) + 
+   geom_bar(stat = 'identity') +scale_fill_viridis(direction = -1)+ coord_flip()+
+    theme_bw()+ theme(legend.position = 'none')+xlab("Sub-Category") + ylab("Top 10 Sub-Categories")
+
+```
+
+<b>Literacy, Literature & Writing and Mathematics are the top 3 subcategories of project.</b>
+
+```{r}
+#Project funding status
+df_projects = df_projects %>% filter(Project.Current.Status!="")
+levels(df_projects$Project.Current.Status)
+ggplot(df_projects, aes(x = as.factor(Project.Current.Status), fill = as.factor(Project.Current.Status))) + geom_bar()+theme_bw()+theme(legend.position = 'none') + xlab('Current Status')
+```
+
+```{r}
+print(paste("Percentage of Fully Funded Projects: ",((df_projects%>%filter(Project.Current.Status=="Fully Funded") %>%nrow)-(df_projects%>%filter(Project.Current.Status=="Expired") %>%nrow)) /(df_projects%>%filter(Project.Current.Status=="Fully Funded") %>%nrow)*100,"%"))
+```
+
+```{r}
+#Grade levels
+levels(df_projects$Project.Grade.Level.Category)
+ggplot(df_projects, aes(as.factor(Project.Grade.Level.Category), fill = as.factor(Project.Grade.Level.Category))) + geom_bar()+theme_bw()+xlab("Grades")+theme(legend.position = 'none')
+```
+
+<b>Most of the projects belong to PreK-2 grade level, followed by grades 3-5 and grades 6-8</b>
+
+```{r}
+#Resources category
+tab <- within(df_projects,  Project.Resource.Category <- factor(Project.Resource.Category, levels=names(sort(table(Project.Resource.Category), decreasing=TRUE))))
+levels(df_projects$Project.Resource.Category)
+
+ggplot(tab, aes(Project.Resource.Category, fill = Project.Resource.Category)) + geom_bar()+theme_bw()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+theme(legend.position = 'none')
+
+```
+
+<b>Most of the resources required for the projects are from technology, supplies and books</b>
+
+### Resources dataset
+
+The file contains 7210448 observations of 5 variables. They are:<br>
+Project ID: Unique identifier of a project.<br>
+Resource Item Name: The name of the requested item, as it appears on the vendor’s website.<br>
+Resource Quantity: The quantity of the requested item.<br>
+Resource Unit Price: The price per unit of the requested item.<br>
+Resource Vendor Name: Name of the vendor.<br>
+
+```{r}
+df_resources %>% summarise_all(funs(n_distinct))
+```
+
+```{r}
+head(df_resources)
+```
+
+```{r}
+glimpse(df_resources)
+```
+
+```{r}
+#Feature engineering
+df_resources$Resource.Vendor.Name=as.factor(df_resources$Resource.Vendor.Name)
+levels(df_resources$Resource.Vendor.Name)
+```
+
+```{r}
+#Replacing "" with NA
+df_resources = df_resources %>% mutate(Resource.Vendor.Name = replace(Resource.Vendor.Name, Resource.Vendor.Name=="", NA))
+head(df_resources)
+```
+
+```{r}
+#Resource Items word cloud
+items <- df_resources %>% sample_n(10000)%>% unnest_tokens(word, Resource.Item.Name)
+items <- items %>% anti_join(stop_words, by = "word")
+items <- items %>% filter(!str_detect(word, "^\\d"))
+
+items %>% count(word) %>% with(wordcloud(word, n, max=200,rot.per=0.45, colors=brewer.pal(8, "Paired")))
+```
+
+<b>We can see that "set", "pack", "book", "black" are the words appearing prominently in the resources list. We can also see that "assorted", "apple", "kit", "white", "level", "colors", etc appear relatively more frequently than the rest.</b>
+
+
+### Teachers Dataset
+
+The file contains 402900 observations with 3 variables. They are:<br>
+Teacher ID: Unique identifier of a teacher.<br>
+Teacher Prefix: “Mrs.”, “Ms.”, “Mr.”, “Teacher” (gender neutral option) chosen by teacher during account creation.<br>
+Teacher First Project Posted Date: Date on which the teacher’s first project was posted.<br>
+```{r}
+df_teachers %>% summarise_all(funs(n_distinct))
+```
+
+```{r}
+glimpse(df_teachers)
+```
+
+```{r}
+#feature engineering
+df_teachers$Teacher.Prefix=as.factor(df_teachers$Teacher.Prefix)
+```
+
+```{r}
+levels(df_teachers$Teacher.Prefix)
+```
+
+```{r}
+#Distribution of teachers based on their prefix
+df_teachers$Teacher.Prefix=as.character(df_teachers$Teacher.Prefix)
+df_teachers = df_teachers %>% mutate(Teacher.Prefix = replace(Teacher.Prefix, Teacher.Prefix=="", "Other"))
+df_teachers$Teacher.Prefix=as.factor(df_teachers$Teacher.Prefix)
+
+tab1 <- within(df_teachers,Teacher.Prefix <- factor(Teacher.Prefix, levels=names(sort(table(Teacher.Prefix), decreasing=TRUE))))
+ggplot(tab1, aes(x = Teacher.Prefix, fill = Teacher.Prefix)) + geom_bar()+ theme_bw()
+```
+
+<b>Most of the teachers are referred by "Mrs."</b>
+
+### Schools Dataset
+
+The file consists of 72993 records of 9 variables. They are:<br>
+School ID: Unique identifier of a school.<br>
+School Name: Name of the school.<br>
+School Metro Type: One of four categories describing metro type, or urbanicity, of school area.<br>
+School Percentage Free Lunch: Integer describing percentage of students qualifying for free or reduced lunch, obtained from NCES data. For schools without NCES data, a district average is used.<br>
+School State: The state of the school that the teacher was teaching at at the time the project was posted.<br>
+School Zip: The zip code of the school that the teacher was teaching at at the time the project was posted.<br>
+School City: The city of the school that the teacher was teaching at at the time the project was posted.<br>
+School County: The county of the school that the teacher was teaching at at the time the project was posted.<br>
+School District: The district of the school that the teacher was teaching at at the time the project was posted.<br>
+```{r}
+glimpse(df_schools)
+```
+
+```{r}
+df_schools %>% summarise_all(funs(n_distinct))
+```
+
+```{r}
+ggplot(df_schools, aes(x=School.Percentage.Free.Lunch))+geom_histogram(bins = 15, color="blue",size = 0.25, fill="lightgreen") + geom_vline(xintercept = mean(df_schools$School.Percentage.Free.Lunch, na.rm= "T"), linetype="dotted", 
+                color = "red", size=.5) + xlab("Free lunch Percent")+
+            ggtitle("Percent of students eligible for free lunch in schools")
+```
+
+<b>Almost 60% of the students are eligible for free lunch in schools.</b>
+
+```{r}
+#Merging the datasets
+merge2 <-  merge(df_donors, df_donations, by = "Donor.ID", all = FALSE)
+merge3 <-  merge(merge2, df_projects, by = "Project.ID", all = FALSE)
+merge4 <-  merge(merge3, df_schools, by = "School.ID", all = FALSE)
+merge4 %>% summarise_all(funs(n_distinct))
+```
+
+Does type of location affect the choice of donors?
+```{r}
+merge4%>% group_by(School.Metro.Type)%>% summarise(count = length(Donor.ID))%>%
+ggplot(aes(x = reorder(School.Metro.Type, -count),count, fill = School.Metro.Type))+geom_bar(stat='identity')+
+theme_bw()+xlab('School Metro Type')
+```
+
+<b>Most of the donations are for to schools in urban and suburban areas.</b>
+
+Does location affect the choice of projects and resources?
+```{r}
+pro <- merge4 %>% sample_n(10000)%>%unnest_tokens(word, Project.Title)
+pro <- pro %>% anti_join(stop_words, by = "word")
+pro <- pro %>% filter(!str_detect(word, "^\\d"))
+
+pro1 <- pro %>% group_by(word, School.Metro.Type) %>% summarise(count = length(word))
+pro2 <- pro %>% group_by(word) %>% summarise(count = length(word)) %>% rename(word.count = count)
+
+
+pro1 %>%left_join(pro2, by = "word") %>%arrange(desc(word.count)) %>%head(50) %>% ungroup() %>%
+  ggplot(aes(reorder(word, count), count, fill = School.Metro.Type)) +
+  geom_bar(stat = 'identity') +
+  xlab(NULL) +
+  coord_flip() +
+ facet_wrap(~ School.Metro.Type) +theme_bw()+
+  theme(legend.position = "none")
+
+```
+
+<b>We see that the schools located in the urban areas require resources for projects that are inclined towards learning, reading, technology, classroom etc. Whereas, the schools located in the rural areas require some of the basic resources such as seating and books at par with learning and technology requirements.</b>
+
+* * *
+## Review 3
+
+* * *
+## RFM Analysis
+
+* * *
+
+RFM stands for Recency, Frequency and Monetary. This segmentation technique is used for targeting the most valuable customers based on their recent activities, how often they contribute and the amount spent.<br>
+From the above plots, we can see that there a lot of first time donors. Building a recommendation solely based on their activity and frequency for these donors is difficult because we don't really know their preferences yet. This leads to a cold start problem. Therefore by using RFM to cluster the donor we can eliminate this problem to an extent. <br>
+After analysis, I'll be fitting clustering models to categorize projects and donors to connect them to the right projects.
+
+```{r}
+#Merging donations and projects
+merge5 = merge(df_donations, df_projects, by="Project.ID")
+head(merge5)
+```
+
+```{r}
+#Taking sample of the data
+set.seed(123)
+sample.df = merge5
+```
+
+```{r}
+#Monetary
+monetary <- sample.df %>% group_by(Donor.ID) %>% summarise(total.donation = sum(Donation.Amount))
+head(monetary)
+```
+
+```{r}
+#Frequency
+frequency <- sample.df %>% group_by(Donor.ID ,Donation.ID) %>% 
+   summarise(freq = length(Donation.ID)) %>% 
+   group_by(Donor.ID) %>% summarise(frequency = sum(freq))
+head(frequency)
+```
+
+```{r}
+#Recency
+#Finding the latest date and adding 1 to received date to get the most recent donation date
+sample.df$Donation.Received.Date <- as.Date(sample.df$Donation.Received.Date, "%Y-%m-%d %H:%M:%S")
+maximum <- max(sample.df$Donation.Received.Date)
+maximum <- maximum +1
+
+#Difference between new and old will give the recent number of days or recency
+#of each donor
+recency <- sample.df %>% group_by(Donor.ID, Donation.Received.Date)
+recency$diff <- maximum - recency$Donation.Received.Date
+recency <- recency %>% group_by(Donor.ID) %>% summarise(recency = min(diff))
+head(recency)
+```
+```{r}
+#RFM dataframe
+RFM = merge(recency, frequency, by="Donor.ID")
+RFM = merge(RFM, monetary, by="Donor.ID")
+```
+
+```{r}
+#Converting recency to numeric
+RFM$recency = as.numeric(RFM$recency)
+```
+
+#### Recency vs Frequency
+```{r}
+ggplot(RFM, aes(x = recency, y = frequency)) + geom_point(aes(color = recency), size = 3) +
+  scale_color_gradientn(colors = c("#00AFBB", "#E7B800", "#FC4E07")) + theme_bw()
+
+```
+
+<b>We can see that recently visiting donors have donated more frequently</b>
+
+#### Recency vs Monetary
+```{r}
+ggplot(RFM, aes(x = recency, y = total.donation)) + geom_point(aes(color = recency), size = 3) +
+  scale_color_gradientn(colors = c("#00AFBB", "#E7B800", "#FC4E07")) + theme_bw()
+```
+
+<b>More recently visiting donors have contributed more</b>
+
+#### Frequency vs Monetary
+```{r}
+ggplot(RFM, aes(x = frequency, y = total.donation)) + geom_point(aes(color = frequency), size = 3) +
+  scale_color_gradientn(colors = c("#00AFBB", "#E7B800", "#FC4E07")) + theme_bw()
+```
+
+<b>The above plot shows that high number of donations needn't lead to high amount of donations.</b>
+
+* * *
+## Clustering Analysis
+
+* * *
+```{r}
+#Standard scaling the data
+Scaled_RFM = scale(RFM[,-1])
+head(Scaled_RFM)
+```
+
+### K Means Clustering
+
+```{r}
+Km = kmeans(Scaled_RFM, centers = 4, iter.max = 50)
+```
+
+```{r}
+clusters <- Km$cluster
+RFM.clusters = cbind(RFM, clusters)
+```
+
+```{r}
+RFM.clusters$clusters <- as.factor(RFM.clusters$clusters)
+ggplot(RFM.clusters,
+      aes(x = frequency, y = total.donation, colour = clusters, shape = clusters)) +
+  geom_point(position = 'jitter') +
+  theme_bw() +
+  labs(title = "Total donation made w.r.t frequency", shape = "cluster", colour = "cluster")
+```
+
+```{r}
+ggplot(RFM.clusters,
+  aes(x = recency, y = total.donation, colour = clusters, shape = clusters)) +
+geom_point() +
+theme_bw() +
+labs(title = "Total donation made w.r.t recency", shape = "cluster", colour = "cluster")
+```
+
+```{r}
+ggplot(RFM.clusters,
+  aes(x = recency, y = frequency, colour = clusters, shape = clusters)) +
+geom_point() +
+theme_bw() +
+labs(title = "Frequency of donation w.r.t recency", shape = "cluster", colour = "cluster")
+```
+
+#### Checking stability of clusters
+```{r}
+RFM.clusters$clusters <- as.numeric(RFM.clusters$clusters)
+clust_no <- 4
+library(fpc)
+set.seed(1234)
+evaluate <- clusterboot(RFM.clusters[,-1], 
+                      B=100, bootmethod="boot",
+                     clustermethod=kmeansCBI,
+                    krange=4, seed=20)
+```
+```{r}
+bootMean_clus <- data.frame(cluster = 1:4, bootMeans = evaluate$bootmean) 
+ggplot(bootMean_clus, aes(cluster, bootMeans)) +
+  geom_point(aes(colour = "darkred", size = 1)) +
+ geom_hline(yintercept = c(0.6, 0.8)) +
+labs(y = "stability", title = "Stability evaluation") +
+theme_bw()+ theme(legend.position="none")
+```
+
+<b>Clusters 1,is highly stable with stability factor close to 1. Cluster 2, 3, 4 are moderately stable having a value between 0.6 and 0.8. Overall, the model is stable and hence we can proceed with k=4.</b>
+
+```{r}
+evaluate$bootmean
+```
+
+<b>Values closer to 1 indicate high stability. </b>
+
+```{r}
+#Filtering clusters
+cluster1 <- RFM.clusters %>% filter(clusters == '1')
+cluster2 <- RFM.clusters %>% filter(clusters == '2')
+cluster3 <- RFM.clusters %>% filter(clusters == '3')
+cluster4 <- RFM.clusters %>% filter(clusters == '4')
+```
+
+#### Merging the cluster RFM values with rest of the data
+```{r}
+cluster1 = merge(cluster1, merge5, by = "Donor.ID", all=FALSE)
+cluster2 = merge(cluster2, merge5, by = "Donor.ID", all=FALSE)
+cluster3 = merge(cluster3, merge5, by = "Donor.ID", all=FALSE)
+cluster4 = merge(cluster4, merge5, by = "Donor.ID", all=FALSE)
+```
+
+```{r}
+cluster1 %>% group_by(cat)%>% filter(!(is.na(cat))) %>%
+summarise(top_cat = length(Donation.ID)) %>%mutate(pct = prop.table(top_cat)*100)%>%
+    ggplot(aes(x = reorder(cat, -pct), y = pct, fill = cat)) + 
+   geom_bar(stat = 'identity') + scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.1f%%", pct)), hjust = 0.5,
+            vjust = -0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+
+              ggtitle("Top Categories in Cluster 1")
+```
+
+```{r}
+cluster2 %>% group_by(cat)%>% filter(!(is.na(cat))) %>%
+summarise(top_cat = length(Donation.ID)) %>%mutate(pct = prop.table(top_cat)*100)%>%
+    ggplot(aes(x = reorder(cat, -pct), y = pct, fill = cat)) + 
+   geom_bar(stat = 'identity') + scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.1f%%", pct)), hjust = 0.5,
+            vjust = -0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+
+              ggtitle("Top Categories in Cluster 2")
+```
+
+```{r}
+cluster3 %>% group_by(cat)%>% filter(!(is.na(cat))) %>%
+summarise(top_cat = length(Donation.ID)) %>%mutate(pct = prop.table(top_cat)*100)%>%
+    ggplot(aes(x = reorder(cat, -pct), y = pct, fill = cat)) + 
+   geom_bar(stat = 'identity') + scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.1f%%", pct)), hjust = 0.5,
+            vjust = -0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+
+              ggtitle("Top Categories in Cluster 3")
+```
+
+```{r}
+cluster4 %>% group_by(cat)%>% filter(!(is.na(cat))) %>%
+summarise(top_cat = length(Donation.ID)) %>%mutate(pct = prop.table(top_cat)*100)%>%
+    ggplot(aes(x = reorder(cat, -pct), y = pct, fill = cat)) + 
+   geom_bar(stat = 'identity') + scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.1f%%", pct)), hjust = 0.5,
+            vjust = -0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+
+              ggtitle("Top Categories in Cluster 4")
+```
+
+```{r}
+cluster1 %>% group_by(subcat)%>% filter(!(is.na(subcat))) %>%
+summarise(top_subcat = length(Donation.ID)) %>%mutate(pct = prop.table(top_subcat)*100)%>%
+    ggplot(aes(x = reorder(subcat, pct), y = pct, fill = subcat)) + 
+   geom_bar(stat = 'identity') + #scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.2f%%", pct)), hjust = -0.5,
+            vjust = 0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+coord_flip()+
+              ggtitle("Cluster 1 Top Sub-Categories")
+```
+
+```{r}
+cluster2 %>% group_by(subcat)%>% filter(!(is.na(subcat))) %>%
+summarise(top_subcat = length(Donation.ID)) %>%mutate(pct = prop.table(top_subcat)*100)%>%
+    ggplot(aes(x = reorder(subcat, pct), y = pct, fill = subcat)) + 
+   geom_bar(stat = 'identity') + #scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.2f%%", pct)), hjust = -0.5,
+            vjust = 0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+coord_flip()+
+              ggtitle("Cluster 2 Top Sub-Categories")
+```
+
+```{r}
+cluster3 %>% group_by(subcat)%>% filter(!(is.na(subcat))) %>%
+summarise(top_subcat = length(Donation.ID)) %>%mutate(pct = prop.table(top_subcat)*100)%>%
+    ggplot(aes(x = reorder(subcat, pct), y = pct, fill = subcat)) + 
+   geom_bar(stat = 'identity') + #scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.2f%%", pct)), hjust = -0.5,
+            vjust = 0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+coord_flip()+
+              ggtitle("Cluster 3 Top Sub-Categories")
+```
+
+```{r}
+cluster4 %>% group_by(subcat)%>% filter(!(is.na(subcat))) %>%
+summarise(top_subcat = length(Donation.ID)) %>%mutate(pct = prop.table(top_subcat)*100)%>%
+    ggplot(aes(x = reorder(subcat, pct), y = pct, fill = subcat)) + 
+   geom_bar(stat = 'identity') + #scale_fill_brewer(palette="Set1")+
+    geom_text(aes(label = sprintf("%.2f%%", pct)), hjust = -0.5,
+            vjust = 0.5, size =3)+ theme_bw()+  xlab("")  + ylab("Percent")+coord_flip()+
+              ggtitle("Cluster 4 Top Sub-Categories")
+```
+
+* * *
+### Inferences from the above plots
+
+(Subject to change with each knit)
+
+<b><u>Cluster 1</u></b>
+<b>Donors in cluster 1 donate very frequently and recently. Even though the major project categories are same for all clusters, 
+Cluster 1 donors prefer music and arts more than the donors from other clusters. The proportion is almost the same as applied learning.<br>
+<b>The top 5 recommended subcategories are :-
+<li>Literacy</li>
+<li>Language & Writing</li>
+<li>Music</li>
+<li>Mathematics</li>
+<li>Applied Sciences</li>
+<br>
+<b><u>Cluster 2</u></b>
+Cluster 2 donors are not very recent donors and their total donation is mostly concentrated within 1000 dollars. Their frequency of donation varies from 1-60. Unlike cluster 1 donors, these donors prefer scientific projects over music and arts. They also prefer professional (ESL) and early development more than other clusters.<br>
+<b>The top 5 recommended subcategories are :-
+<li>Literacy</li>
+<li>Language & Writing</li>
+<li>Applied Sciences</li>
+<li>Mathematics</li>
+<li>Environmental Sciences</li>
+<br>
+<b><u>Cluster 3</u></b>
+The Cluster 3 donors are those who donated to a project not very long ago but are not that recent either. Like cluster 1, they also prefer music but on contrary prefer professional (ESL) and early development more than other clusters. This suggests that these donors prefer overall development of an individual.<br>
+<b>The top 5 recommended subcategories are :-
+<li>Literacy</li>
+<li>Language & Writing</li>
+<li>Music</li>
+<li>Mathematics</li>
+<li>Early Development</li>
+<br>
+<b><u>Cluster 4</u></b>
+Cluster 4 donors don't donate frequently. They donate only once in a long time. Donors in this cluster may prefer Music & Arts over character development. This cluster shows a strong similarity with cluster 2. However, their recency and frequency is in different ranges.<br>
+<b>The top 5 recommended subcategories are :-
+<li>Literacy</li>
+<li>Language & Writing</li>
+<li>Applied Sciences</li>
+<li>Mathematics</li>
+<li>Environmental Sciences</li>
+<br>
+
+***
+### Top 10 projects (Project ID) in each cluster based on the number of donations
+
+Although, high number donations needn't lead to high amount.
+
+<br>
+#### Cluster 1
+```{r}
+cluster1 %>% group_by(Project.ID)%>%summarize(no.of.donors=n())%>% 
+  arrange(desc(no.of.donors)) %>% 
+  top_n(10) 
+```
+
+#### Cluster 2
+```{r}
+cluster2 %>% group_by(Project.ID)%>%summarize(no.of.donors=n())%>% 
+  arrange(desc(no.of.donors)) %>% 
+  top_n(10) 
+```
+
+#### Cluster 3
+```{r}
+cluster3 %>% group_by(Project.ID)%>%summarize(no.of.donors=n())%>% 
+  arrange(desc(no.of.donors)) %>% 
+  top_n(10) 
+```
+
+#### Cluster 4
+```{r}
+cluster4 %>% group_by(Project.ID)%>%summarize(no.of.donors=n())%>% 
+  arrange(desc(no.of.donors)) %>% 
+  top_n(10) 
+```
+
+
+* * *
